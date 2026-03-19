@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marketo QA Validator</title>
+    <meta name="description" content="Validate Marketo landing page and email template code against your organisation's QA checklist.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="site-header">
+    <div class="header-brand">
+        <div class="header-logo">🛡️</div>
+        <div>
+            <div class="header-title">Marketo QA Validator</div>
+            <div class="header-tag">Template Quality Checker</div>
+        </div>
+    </div>
+    <div class="header-badge" id="rulesBadgeBtn" title="View all QA rules">22 Rules · 8 Categories</div>
+</header>
+
+<!-- MAIN -->
+<main class="main">
+
+    <!-- INPUT PANEL -->
+    <div class="input-panel">
+        <div class="panel-header">
+            <div class="panel-title">📄 Paste or Upload Template Code</div>
+        </div>
+
+        <!-- Drop Zone -->
+        <div class="drop-zone" id="dropZone">
+            <div class="drop-zone-icon">⬆️</div>
+            <div>Drag &amp; drop your <strong>.html</strong> and <strong>.css</strong> files here</div>
+            <div class="drop-zone-hint">or click below to browse</div>
+            <br>
+            <button class="btn btn-ghost btn-sm" id="uploadBtn">📂 Browse Files</button>
+            <input type="file" id="fileInput" accept=".html,.htm,.css" multiple style="display:none">
+        </div>
+
+        <!-- Paste Area -->
+        <div class="textarea-wrap">
+            <div class="code-label">Or paste HTML code directly</div>
+            <textarea id="codeInput" placeholder="Paste your Marketo template HTML here…" spellcheck="false"></textarea>
+            
+            <div class="code-label mt-4">Style CSS</div>
+            <textarea id="styleInput" class="css-input" placeholder="Paste your main style.css here…" spellcheck="false"></textarea>
+
+            <div class="code-label mt-4">Responsive CSS</div>
+            <textarea id="responsiveInput" class="css-input" placeholder="Paste your responsive.css here…" spellcheck="false"></textarea>
+
+            <div class="input-footer">
+                <span id="charCount"></span>
+                <button class="btn btn-ghost btn-sm" id="clearBtn">🗑 Clear</button>
+            </div>
+        </div>
+
+        <!-- Validate Button -->
+        <div class="validate-wrap">
+            <button class="btn btn-primary" id="validateBtn">
+                <span>🔍</span>
+                <span class="btn-text">Validate</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- RESULTS -->
+    <div id="resultsSection" class="hidden">
+
+        <!-- Summary Cards -->
+        <div class="summary-bar">
+            <div class="summary-card card-passed">
+                <div class="card-value" id="sumPassed">0</div>
+                <div class="card-label">✅ Passed</div>
+            </div>
+            <div class="summary-card card-critical">
+                <div class="card-value" id="sumCritical">0</div>
+                <div class="card-label">🔴 Critical</div>
+            </div>
+            <div class="summary-card card-warning">
+                <div class="card-value" id="sumWarning">0</div>
+                <div class="card-label">🟡 Warnings</div>
+            </div>
+            <div class="summary-card card-info">
+                <div class="card-value" id="sumInfo">0</div>
+                <div class="card-label">🔵 Info</div>
+            </div>
+        </div>
+
+        <!-- Results Header -->
+        <div class="results-header">
+            <div class="results-title">Validation Results</div>
+            <button class="btn btn-ghost btn-sm" id="exportBtn">📄 Export Report</button>
+        </div>
+
+        <!-- Results Body -->
+        <div id="resultsBody"></div>
+    </div>
+
+</main>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Rules Modal -->
+<div class="modal-overlay hidden" id="rulesModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">QA Checklist Rules</h3>
+            <button class="modal-close" id="closeModalBtn">×</button>
+        </div>
+        <div class="modal-body" id="rulesModalBody">
+            <!-- Rules will be injected here -->
+        </div>
+    </div>
+</div>
+
+<script src="js/rules.js"></script>
+<script src="js/validator.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

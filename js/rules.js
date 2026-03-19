@@ -2,14 +2,25 @@
 // Marketo QA Tool — Rule Definitions
 // =============================================
 
-function findLine(lines, search) {
-    if (!search) return null;
+function findLine(lines, search, startIndex = 0) {
+    if (!search || !lines) return null;
     const s = search.toLowerCase();
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = startIndex; i < lines.length; i++) {
         if (lines[i].toLowerCase().includes(s)) return i + 1;
     }
     return null;
 }
+
+function findLineRegex(lines, regex) {
+    if (!lines || !regex) return null;
+    for (let i = 0; i < lines.length; i++) {
+        const cleanLine = lines[i].replace(/\/\*[\s\S]*?\*\//g, '');
+        if (regex.test(cleanLine)) return i + 1;
+    }
+    return null;
+}
+
+const stripComments = (str) => (str || '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 const RULES = [
 
@@ -80,13 +91,22 @@ const RULES = [
         severity: 'warning',
         description: 'Body must have -webkit-font-smoothing: antialiased.',
         check(ctx) {
-            const { raw, styleCSS, lines, styleLines } = ctx;
+            const { doc, styleCSS, responsiveCSS, lines, styleLines } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS;
+            
+            // Collect all CSS and strip comments
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+            
             // Matches: body { ... -webkit-font-smoothing: antialiased ... } or html, body { ... }
             const bodyHasSmoothing = /(?:^|\s|,|\})body(?:\s*|,.*?)\{[^}]*-webkit-font-smoothing\s*:\s*antialiased[^}]*\}/i.test(fullCss);
+            
             if (!bodyHasSmoothing) {
-                issues.push({ line: findLine(lines, 'body') || findLine(styleLines, 'body'), message: 'body missing -webkit-font-smoothing: antialiased', suggestion: 'Add -webkit-font-smoothing: antialiased to the body CSS rule.' });
+                issues.push({ 
+                    line: findLine(lines, 'body') || findLine(styleLines, 'body'), 
+                    message: 'body missing active -webkit-font-smoothing: antialiased', 
+                    suggestion: 'Add -webkit-font-smoothing: antialiased to the body CSS rule.' 
+                });
             }
             return { issues };
         }
@@ -96,15 +116,48 @@ const RULES = [
         name: 'Global H1–H6 Styles',
         category: 'Typography',
         severity: 'warning',
-        description: 'All heading levels H1–H6 must be styled globally.',
+        description: 'All heading levels H1–H6 present in the template must be styled globally.',
         check(ctx) {
-            const { raw, styleCSS } = ctx;
+            const { doc, styleCSS, responsiveCSS, lines, styleLines, responsiveLines } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS;
+            
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            
+            const mainCss = stripComments(styleCSS);
+            const respCss = stripComments(responsiveCSS);
+            
             for (let i = 1; i <= 6; i++) {
-                const pattern = new RegExp(`(?:[\\s,{>])h${i}(?:[\\s{,.:]|$)`, 'm');
-                if (!pattern.test(fullCss)) {
-                    issues.push({ line: null, message: `h${i} is not styled globally in CSS`, suggestion: `.up h${i} { font-size: ...; line-height: ...; }` });
+                const tag = `h${i}`;
+                if (doc.querySelector(tag)) {
+                    const pattern = new RegExp(`(?:^|,|\\.up\\s+)\\s*${tag}\\s*[{,:]`, 'im');
+                    
+                    const inMain = pattern.test(mainCss);
+                    const inTags = pattern.test(styleTags);
+                    const inResp = pattern.test(respCss);
+
+                    if (inMain || inTags) {
+                        const line = inMain ? findLineRegex(styleLines, pattern) : findLineRegex(lines, pattern);
+                        const file = inMain ? 'Style CSS' : 'HTML Style Tag';
+                        issues.push({ 
+                            line, 
+                            message: `Global style for ${tag.toUpperCase()} detected in ${file}.`, 
+                            severity: 'info',
+                            suggestion: 'Confirmed global baseline style found.' 
+                        });
+                    } else if (inResp) {
+                        const line = findLineRegex(responsiveLines, pattern);
+                        issues.push({ 
+                            line, 
+                            message: `${tag.toUpperCase()} is styled in Responsive CSS only but lacks a global base style in your main CSS.`, 
+                            suggestion: `Add .up ${tag} { ... } in your main <style> block.` 
+                        });
+                    } else {
+                        issues.push({ 
+                            line: null, 
+                            message: `${tag.toUpperCase()} is used in HTML but lacks a global base style entirely.`, 
+                            suggestion: `Add .up ${tag} { font-size: ...; font-family: ...; } in your main <style> block.` 
+                        });
+                    }
                 }
             }
             return { issues };
@@ -115,15 +168,48 @@ const RULES = [
         name: 'Global ul / ol / li Styles',
         category: 'Typography',
         severity: 'warning',
-        description: 'Lists must have global CSS styles for consistent formatting.',
+        description: 'Lists present in the template must have global CSS styles.',
         check(ctx) {
-            const { raw, styleCSS } = ctx;
+            const { doc, styleCSS, responsiveCSS, lines, styleLines, responsiveLines } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS;
+            
+            const stripComments = (str) => (str || '').replace(/\/\*[\s\S]*?\*\//g, '');
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            
+            const mainCss = stripComments(styleCSS);
+            const respCss = stripComments(responsiveCSS);
+            
             ['ul', 'ol', 'li'].forEach(tag => {
-                const pattern = new RegExp(`(?:[\\s,{>])${tag}(?:[\\s{,.]|$)`, 'm');
-                if (!pattern.test(fullCss)) {
-                    issues.push({ line: null, message: `<${tag}> not globally styled`, suggestion: `Add .up ${tag} { ... } in your main <style> block.` });
+                if (doc.querySelector(tag)) {
+                    const pattern = new RegExp(`(?:^|,|\\.up\\s+)\\s*${tag}\\s*[{,:]`, 'im');
+                    
+                    const inMain = pattern.test(mainCss);
+                    const inTags = pattern.test(styleTags);
+                    const inResp = pattern.test(respCss);
+
+                    if (inMain || inTags) {
+                        const line = inMain ? findLineRegex(styleLines, pattern) : findLineRegex(lines, pattern);
+                        const file = inMain ? 'Style CSS' : 'HTML Style Tag';
+                        issues.push({ 
+                            line, 
+                            message: `Global style for <${tag}> detected in ${file}.`, 
+                            severity: 'info',
+                            suggestion: 'Confirmed global baseline style found.' 
+                        });
+                    } else if (inResp) {
+                        const line = findLineRegex(responsiveLines, pattern);
+                        issues.push({ 
+                            line, 
+                            message: `<${tag}> is styled in Responsive CSS only but lacks a global base style in your main CSS.`, 
+                            suggestion: `Add .up ${tag} { ... } in your main <style> block.` 
+                        });
+                    } else {
+                        issues.push({ 
+                            line: null, 
+                            message: `<${tag}> is used in HTML but lacks a global base style entirely.`, 
+                            suggestion: `Add .up ${tag} { list-style: ...; } in your main <style> block.` 
+                        });
+                    }
                 }
             });
             return { issues };
@@ -136,9 +222,11 @@ const RULES = [
         severity: 'info',
         description: 'flag font-weight: bold/700 for manual Mac Chrome verification (passes automatically if body font-smoothing is active).',
         check(ctx) {
-            const { raw, styleCSS, lines, styleLines, responsiveLines } = ctx;
+            const { doc, styleCSS, responsiveCSS, lines, styleLines, responsiveLines } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS;
+            
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
             
             // Check if smoothing is already present
             const bodyHasSmoothing = /(?:^|\s|,|\})body(?:\s*|,.*?)\{[^}]*-webkit-font-smoothing\s*:\s*antialiased[^}]*\}/i.test(fullCss);
@@ -173,12 +261,21 @@ const RULES = [
             const { doc, lines } = ctx;
             const issues = [];
             const boolIds = Array.from(doc.querySelectorAll('meta.mktoBoolean')).map(m => m.id);
-            const sections = doc.querySelectorAll('[class*="-section"], .mid-container > div[class]');
+            const mainSectionSelector = '[class*="-section"], [class*="module"], .mid-container > div[class]:not(.wrapper):not(.container):not(.inner):not(.outer)';
+            const parentSectionSelector = '[class*="-section"], [class*="module"]';
+
+            const sections = Array.from(doc.querySelectorAll(mainSectionSelector))
+                .filter(el => {
+                    if (el.closest('header, footer')) return false;
+                    // Skip if nested inside another REAL section (ignore generic wrappers)
+                    const parentSection = el.parentElement.closest(parentSectionSelector);
+                    return !parentSection;
+                });
+
             const seen = new Set();
             sections.forEach(section => {
                 const cls = section.className.split(' ')[0];
                 if (seen.has(cls) || !cls) return;
-                if (section.closest('header') || section.closest('footer')) return;
                 seen.add(cls);
                 const style = section.getAttribute('style') || '';
                 const displayMatch = style.match(/display\s*:\s*\$\{([^}]+)\}/);
@@ -194,137 +291,106 @@ const RULES = [
             return { issues };
         }
     },
-    {
-        id: 'hidden-section-no-gap',
-        name: 'Hidden Sections Must Not Create Gaps',
-        category: 'Show / Hide',
-        severity: 'warning',
-        description: 'mktoBoolean false_value must be "none" to collapse hidden sections.',
-        check(ctx) {
-            const { doc, lines } = ctx;
-            const issues = [];
-            doc.querySelectorAll('meta.mktoBoolean').forEach(meta => {
-                const falseVal = meta.getAttribute('false_value');
-                if (falseVal && falseVal !== 'none') {
-                    issues.push({ line: findLine(lines, meta.id), message: `mktoBoolean "${meta.id}" uses false_value="${falseVal}" — may leave spacing gaps`, suggestion: 'Change to false_value="none" so the section fully collapses when hidden.' });
-                }
-            });
-            return { issues };
-        }
-    },
+
 
     // ─── BUTTONS ─────────────────────────────────────────────────────────────
     {
-        id: 'button-show-hide',
-        name: 'Button Show/Hide Toggle',
+        id: 'comprehensive-button-requirements',
+        name: 'Comprehensive Button Requirements',
         category: 'Buttons',
         severity: 'critical',
-        description: 'Each button must have an independent show/hide mktoBoolean.',
+        description: 'Verify buttons have show/hide, editable text, links, and design-aligned colors.',
         check(ctx) {
-            const { doc, lines } = ctx;
+            const { doc, lines, styleLines, responsiveLines, styleCSS, responsiveCSS, raw } = ctx;
             const issues = [];
             const boolIds = Array.from(doc.querySelectorAll('meta.mktoBoolean')).map(m => m.id);
-            doc.querySelectorAll('.btn_grp').forEach(grp => {
-                const parent = grp.parentElement;
-                if (!parent) return;
-                const style = parent.getAttribute('style') || '';
-                const gp = parent.parentElement;
-                const gpStyle = gp ? (gp.getAttribute('style') || '') : '';
-                const hasToggle = /display\s*:\s*\$\{/.test(style) || /display\s*:\s*\$\{/.test(gpStyle);
+            const colorIds = Array.from(doc.querySelectorAll('meta.mktoColor')).map(m => m.id.toLowerCase());
+            const fullCss = raw + '\n' + styleCSS + '\n' + responsiveCSS;
+
+            // Selector covers both standard wrappers and the user's custom example
+            const btnSelector = '.btn_grp, .button, .btn, .sticky_btn, a.mktoText[id*="btn"]';
+            const buttons = Array.from(doc.querySelectorAll(btnSelector));
+
+            let lastBtnLine = 0;
+            buttons.forEach(btn => {
+                const id = btn.id || btn.className.split(' ')[0] || 'button';
+                const search = btn.id ? `id="${btn.id}"` : btn.textContent.trim().substring(0, 30);
+                const name = btn.id || `"${btn.textContent.trim().substring(0, 20)}..."`;
+                
+                const foundLine = findLine(lines, search, lastBtnLine) || findLine(lines, id, lastBtnLine);
+                if (foundLine) lastBtnLine = foundLine;
+
+                const style = btn.getAttribute('style') || '';
+                const parentStyle = btn.parentElement ? (btn.parentElement.getAttribute('style') || '') : '';
+                const anchor = btn.tagName === 'A' ? btn : btn.querySelector('a');
+
+                const btnFailures = [];
+                const suggestions = [];
+
+                // 1. Show/Hide Functionality
+                const hasToggle = /display\s*:\s*\$\{/.test(style) || /display\s*:\s*\$\{/.test(parentStyle);
                 if (!hasToggle) {
-                    issues.push({ line: findLine(lines, parent.className || 'btn_grp'), message: `Button group in ".${parent.className || 'unknown'}" has no show/hide toggle`, suggestion: 'Wrap in a div with style="display:${show_btn};" and add mktoBoolean in <head>.' });
-                } else {
-                    const m = (style + gpStyle).match(/display\s*:\s*\$\{([^}]+)\}/);
-                    if (m && !boolIds.includes(m[1].trim())) {
-                        issues.push({ line: findLine(lines, m[1]), message: `Button toggle variable "\${${m[1]}}" not declared as mktoBoolean`, suggestion: `Add: <meta class="mktoBoolean" id="${m[1]}" mktoName="Show Button" default="true" false_value="none" true_value="block">` });
+                    btnFailures.push('missing Show/Hide toggle');
+                    suggestions.push(`Wrap in a div or add style="display:\${show_${btn.id || 'button'}};" with a mktoBoolean.`);
+                }
+
+                // 2. Editable Text
+                if (anchor) {
+                    const hasMktoText = anchor.classList.contains('mktoText') || !!anchor.querySelector('.mktoText');
+                    if (!hasMktoText) {
+                        btnFailures.push('text is not editable (no mktoText)');
+                        suggestions.push('Add class="mktoText" to the anchor or wrap text in a mktoText span.');
+                    }
+
+                    // 3. Editable Link
+                    const href = anchor.getAttribute('href') || '';
+                    if (href && !href.includes('${') && !anchor.classList.contains('mktoLink') && href !== '#') {
+                        btnFailures.push(`link is hardcoded: "${href}"`);
+                        suggestions.push('Use a Marketo variable like href="${btn_url}" or add class="mktoLink".');
                     }
                 }
-            });
-            return { issues };
-        }
-    },
-    {
-        id: 'button-editable-text',
-        name: 'Button Text Must Be Editable (mktoText)',
-        category: 'Buttons',
-        severity: 'critical',
-        description: 'Button text must be wrapped in mktoText for editor access.',
-        check(ctx) {
-            const { doc, lines } = ctx;
-            const issues = [];
-            doc.querySelectorAll('.btn_grp a, .btn_grp > div > a').forEach(btn => {
-                const hasText = btn.classList.contains('mktoText') || !!btn.querySelector('.mktoText');
-                if (!hasText) {
-                    const id = btn.id || btn.className || 'button';
-                    issues.push({ line: findLine(lines, id), message: `Button "${id}" text is not editable (no mktoText)`, suggestion: 'Add <span class="mktoText" id="btn_text" mktoName="Button Text"> inside the anchor.' });
-                }
-            });
-            return { issues };
-        }
-    },
-    {
-        id: 'button-colors-editable',
-        name: 'Button Colors Must Be Editable (mktoColor)',
-        category: 'Buttons',
-        severity: 'critical',
-        description: 'Buttons need mktoColor for BG, hover BG, border, hover border, and text color.',
-        check(ctx) {
-            const { doc, lines } = ctx;
-            const issues = [];
-            const hasBtns = !!doc.querySelector('.btn_grp');
-            if (!hasBtns) return { issues };
-            const colorIds = Array.from(doc.querySelectorAll('meta.mktoColor')).map(m => m.id.toLowerCase());
-            const required = [
-                { pattern: /btn.*bg|btn.*background/i, label: 'Button BG Color' },
-                { pattern: /btn.*hover.*bg|hover.*btn.*bg/i, label: 'Button Hover BG Color' },
-                { pattern: /btn.*border/i, label: 'Button Border Color' },
-                { pattern: /btn.*hover.*border|hover.*btn.*border/i, label: 'Button Hover Border Color' },
-                { pattern: /btn.*text/i, label: 'Button Text Color' }
-            ];
-            required.forEach(r => {
-                if (!colorIds.some(id => r.pattern.test(id))) {
-                    issues.push({ line: findLine(lines, 'mktoColor'), message: `Missing mktoColor variable for: ${r.label}`, suggestion: `Add <meta class="mktoColor" id="btn_color" mktoName="${r.label}" default="#000000"> in <head>.` });
-                }
-            });
-            return { issues };
-        }
-    },
-    {
-        id: 'button-no-hardcoded-colors',
-        name: 'No Hardcoded Colors on Buttons',
-        category: 'Buttons',
-        severity: 'warning',
-        description: 'Button inline styles and CSS must not have hardcoded hex colors.',
-        check(ctx) {
-            const { raw, styleCSS, responsiveCSS, doc, lines, styleLines, responsiveLines } = ctx;
-            const issues = [];
-            
-            // HTML Inline
-            doc.querySelectorAll('.btn_grp a, .btn_grp > div > a, .sticky_btn a').forEach(btn => {
-                const style = btn.getAttribute('style') || '';
-                const hexMatch = style.match(/#[0-9a-fA-F]{3,6}/);
-                if (hexMatch) {
-                    const id = btn.id || btn.className || 'button';
-                    issues.push({ line: findLine(lines, hexMatch[0]), message: `Button "${id}" has hardcoded color "${hexMatch[0]}" in inline style`, suggestion: 'Replace hardcoded hex with Marketo variable e.g. style="color: ${btn_text_color};"' });
+
+                if (btnFailures.length > 0) {
+                    issues.push({
+                        line: foundLine,
+                        message: `Button ${name}: ` + btnFailures.join('; '),
+                        suggestion: suggestions.join(' ')
+                    });
                 }
             });
 
-            // External CSS checking for .btn classes and hex
-            const checkCssText = (cssArr, source) => {
-                cssArr.forEach((line, idx) => {
-                    if (/\.btn(_grp)?(-.*?)?\s*\{[^}]*#[0-9a-fA-F]{3,6}/i.test(line)) {
-                         // crude regex to find hex inside curly braces connected to btn class
-                         // Let's instead just look for direct btn class and hex in same line for simplicity since it's hard to parse full CSS robustly with regex
-                    }
-                    if (/(btn|button)[^{]*\{[^{]*#[0-9a-fA-F]{3,6}/i.test(line)) {
-                        issues.push({ line: idx + 1, message: `Button styles in ${source} have hardcoded color`, suggestion: 'Avoid hardcoded colors for buttons to allow Marketo customisation.' });
-                    }
-                });
+            // 4. Button Colors (Global variables check)
+            if (buttons.length > 0) {
+                const hasBtnColor = colorIds.some(id => /btn/i.test(id));
+                if (!hasBtnColor) {
+                    issues.push({
+                        line: findLine(lines, 'mktoColor'),
+                        message: 'No mktoColor variable found for button styling',
+                        suggestion: 'Add at least one <meta class="mktoColor" id="btn_color" mktoName="Button Color" default="#000000"> in <head> to allow global button color editing.'
+                    });
+                }
             }
 
-            checkCssText(styleLines, 'Style CSS');
-            checkCssText(responsiveLines, 'Responsive CSS');
-            
+            // 5. No Hardcoded Colors (Inline check)
+            let lastColorLine = 0;
+            buttons.forEach(btn => {
+                const id = btn.id || btn.className.split(' ')[0] || 'button';
+                const search = btn.id ? `id="${btn.id}"` : btn.textContent.trim().substring(0, 30);
+                const name = btn.id || `"${btn.textContent.trim().substring(0, 20)}..."`;
+                
+                const foundLine = findLine(lines, search, lastColorLine) || findLine(lines, id, lastColorLine);
+                if (foundLine) lastColorLine = foundLine;
+
+                const style = btn.getAttribute('style') || '';
+                if (/#([0-9a-fA-F]{3,6})/.test(style)) {
+                    issues.push({
+                        line: foundLine,
+                        message: `Button ${name} has hardcoded hex color in inline style`,
+                        suggestion: 'Replace with a Marketo variable for editability.'
+                    });
+                }
+            });
+
             return { issues };
         }
     },
@@ -332,26 +398,58 @@ const RULES = [
     // ─── SECTIONS ────────────────────────────────────────────────────────────
     {
         id: 'section-reorder-support',
-        name: 'Section Reordering via CSS Order',
+        name: 'Section Reordering Support',
         category: 'Sections',
         severity: 'critical',
-        description: 'Sections must support Marketo reordering via CSS order property.',
         check(ctx) {
-            const { doc, lines } = ctx;
+            const { doc, lines, styleCSS, responsiveCSS } = ctx;
             const issues = [];
             const seen = new Set();
-            doc.querySelectorAll('[class*="-section"], .mid-container > div[class]').forEach(section => {
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+            
+            const mainSectionSelector = '[class*="-section"], [class*="module"], .mid-container > div[class]:not(.wrapper):not(.container):not(.inner):not(.outer)';
+            const parentSectionSelector = '[class*="-section"], [class*="module"]';
+            
+            const sections = Array.from(doc.querySelectorAll(mainSectionSelector))
+                .filter(el => {
+                    if (el.closest('header, footer')) return false;
+                    const parentSection = el.parentElement.closest(parentSectionSelector);
+                    return !parentSection;
+                });
+
+            // 1. Check for Flex Container
+            const hasFlexContainer = /\.mid-container[^{]*\{[^}]*display\s*:\s*flex/i.test(fullCss) || 
+                                     /display\s*:\s*flex/.test(doc.querySelector('.mid-container')?.getAttribute('style') || '');
+            if (!hasFlexContainer && sections.length > 1) {
+                issues.push({ 
+                    line: null, 
+                    message: 'Main section container (.mid-container) is not set to display: flex', 
+                    suggestion: 'Add "display: flex; flex-direction: column;" to .mid-container to enable the "order" property for reordering.' 
+                });
+            }
+
+            sections.forEach(section => {
                 const cls = section.className.split(' ')[0];
                 if (seen.has(cls) || !cls) return;
-                if (section.closest('header') || section.closest('footer')) return;
                 seen.add(cls);
                 const style = section.getAttribute('style') || '';
+                
+                // 2. Check Order Property
                 if (!/order\s*:\s*\$\{[^}]+\}/.test(style)) {
-                    const hasHardcoded = /\border\s*:\s*\d/.test(style);
                     issues.push({
                         line: findLine(lines, cls),
-                        message: `Section ".${cls}" has no dynamic order property for reordering`,
-                        suggestion: `Add "order: \${${cls.replace(/-section/, '')}_order};" to section style and declare mktoString in <head>.`
+                        message: `Section ".${cls}" missing dynamic order property`,
+                        suggestion: `Add style="order: \${${cls.replace(/-/g, '_')}_order};" to enable reordering.`
+                    });
+                }
+                
+                // 3. No Absolute Position (Layout Dependency)
+                if (/position\s*:\s*absolute/i.test(style)) {
+                    issues.push({
+                        line: findLine(lines, cls),
+                        message: `Section ".${cls}" uses position: absolute`,
+                        suggestion: 'Avoid position: absolute on main sections as it breaks the flexbox "order" property for reordering.'
                     });
                 }
             });
@@ -359,64 +457,68 @@ const RULES = [
         }
     },
     {
-        id: 'section-bg-color-editable',
-        name: 'Section Background Color Editable',
+        id: 'section-bg-image-and-color',
+        name: 'Section Background Fallback & Editability',
         category: 'Sections',
         severity: 'warning',
-        description: 'Each section must have an mktoColor variable for background color.',
-        check(ctx) {
-            const { doc, lines } = ctx;
-            const issues = [];
-            const seen = new Set();
-            doc.querySelectorAll('[class*="-section"], .mid-container > div[class]').forEach(section => {
-                const cls = section.className.split(' ')[0];
-                if (seen.has(cls) || !cls) return;
-                if (section.closest('header') || section.closest('footer')) return;
-                seen.add(cls);
-                const style = section.getAttribute('style') || '';
-                if (!/background-color\s*:\s*\$\{[^}]+\}/.test(style)) {
-                    const hardcoded = style.match(/background-color\s*:\s*(#[0-9a-fA-F]{3,6}|rgb)/);
-                    if (hardcoded) {
-                        issues.push({ line: findLine(lines, cls), message: `Section ".${cls}" has hardcoded background-color`, suggestion: `Use background-color: \${${cls.replace(/-/g,'_')}_bg_color} and add mktoColor in <head>.` });
-                    } else {
-                        issues.push({ line: findLine(lines, cls), message: `Section ".${cls}" has no editable background color`, suggestion: `Add background-color: \${${cls.replace(/-/g,'_')}_bg_color} to section style and declare mktoColor in <head>.` });
-                    }
-                }
-            });
-            return { issues };
-        }
-    },
-    {
-        id: 'section-bg-image-editable',
-        name: 'Background Images Must Be Editable',
-        category: 'Sections',
-        severity: 'info',
-        description: 'Hardcoded background-image URLs in styles should use Marketo variables.',
+        description: 'Each section must have BOTH background-image and background-color editable for proper fallback.',
         check(ctx) {
             const { doc, lines, styleLines, responsiveLines } = ctx;
             const issues = [];
             
-            // Inline HTML
-            doc.querySelectorAll('[style*="background-image"]').forEach(el => {
-                const style = el.getAttribute('style');
-                if (!style.includes('${')) {
-                    issues.push({ line: findLine(lines, 'background-image'), message: `Element ".${el.className.split(' ')[0]}" has hardcoded background-image`, suggestion: 'Use background-image: url(${bg_image_variable}) with mktoString or mktoImg.' });
+            const mainSectionSelector = '[class*="-section"], [class*="module"], .mid-container > div[class]:not(.wrapper):not(.container):not(.inner):not(.outer)';
+            const parentSectionSelector = '[class*="-section"], [class*="module"]';
+
+            const sections = Array.from(doc.querySelectorAll(mainSectionSelector))
+                .filter(el => {
+                    if (el.closest('header, footer')) return false;
+                    const parentSection = el.parentElement.closest(parentSectionSelector);
+                    return !parentSection;
+                });
+
+            const seen = new Set();
+            sections.forEach(section => {
+                const cls = section.className.split(' ')[0];
+                if (seen.has(cls) || !cls) return;
+                seen.add(cls);
+                const style = section.getAttribute('style') || '';
+                
+                const hasBgImg = /background-image\s*:\s*url\(\s*\$\{[^}]+\}\s*\)/i.test(style);
+                const hasBgColor = /background-color\s*:\s*\$\{[^}]+\}/i.test(style);
+
+                if (!hasBgImg) {
+                    issues.push({ 
+                        line: findLine(lines, cls), 
+                        message: `Section ".${cls}" missing editable background-image`, 
+                        suggestion: `Add "background-image: url(\${${cls.replace(/-/g,'_')}_bg_image});" using mktoImg or mktoString.` 
+                    });
+                }
+                
+                if (!hasBgColor) {
+                    issues.push({ 
+                        line: findLine(lines, cls), 
+                        message: `Section ".${cls}" missing editable background-color fallback`, 
+                        suggestion: `Add "background-color: \${${cls.replace(/-/g,'_')}_bg_color};" so a color applies if the image is removed.` 
+                    });
                 }
             });
 
-            // External CSS
+            // check for hardcoded images in CSS
             const checkCssBg = (cssArr, source) => {
                 cssArr.forEach((line, idx) => {
                     const bgInLine = line.match(/background-image\s*:\s*url\(['"]?(?!\$\{)(?!.*\$\{)[^)'"]+['"]?\)/gi);
                     if (bgInLine) {
-                        issues.push({ line: idx + 1, message: `Hardcoded background-image in ${source}: "${bgInLine[0].slice(0, 60)}"`, suggestion: 'Use a mktoString variable for editability.' });
+                        issues.push({ 
+                            line: idx + 1, 
+                            message: `Hardcoded background-image found in ${source}`, 
+                            suggestion: 'Use a Marketo variable (mktoImg or mktoString) to allow users to update the image.' 
+                        });
                     }
                 });
             };
-
             checkCssBg(styleLines, 'Style CSS');
             checkCssBg(responsiveLines, 'Responsive CSS');
-            
+
             return { issues };
         }
     },
@@ -424,21 +526,36 @@ const RULES = [
     // ─── NAMING ──────────────────────────────────────────────────────────────
     {
         id: 'mkto-naming-convention',
-        name: 'Marketo ID Naming Convention',
+        name: 'Section-based Naming Convention',
         category: 'Naming',
         severity: 'warning',
-        description: 'mkto IDs must follow section_element pattern, no generic names.',
+        description: 'mkto IDs must follow section-based naming (e.g., Banner_section) and avoid generic names like Module1.',
         check(ctx) {
             const { doc, lines } = ctx;
             const issues = [];
-            const generic = /^(module|section|div|item|element|new|test|comp|block|part|area|widget|region)\d*$/i;
-            doc.querySelectorAll('[id][class*="mkto"]').forEach(el => {
+            
+            // Prohibit generic names based on user's examples
+            const generic = /^(module|section|div|item|element|new|test|comp|block|part|area|widget|region|newmodule)\d*$/i;
+            
+            doc.querySelectorAll('[id][class*="mkto"], meta[id][class*="mkto"]').forEach(el => {
                 const id = el.id;
                 if (!id || id.includes('${')) return;
+                
+                // 1. Check for generic names
                 if (generic.test(id)) {
-                    issues.push({ line: findLine(lines, `id="${id}"`), message: `Generic mkto ID "${id}" found`, suggestion: 'Rename to follow section_element pattern (e.g., banner_title, footer_logo_img).' });
-                } else if (!id.includes('_')) {
-                    issues.push({ line: findLine(lines, `id="${id}"`), message: `mkto ID "${id}" missing section prefix`, suggestion: `Add a section prefix: e.g., "sectionname_${id}".` });
+                    issues.push({ 
+                        line: findLine(lines, `id="${id}"`), 
+                        message: `Generic name "${id}" found in ID`, 
+                        suggestion: 'Avoid generic names like "Module1" or "NewModule". Use descriptive names like "Banner_section".' 
+                    });
+                } 
+                // 2. Check for underscore and descriptive pattern
+                else if (!id.includes('_')) {
+                    issues.push({ 
+                        line: findLine(lines, `id="${id}"`), 
+                        message: `ID "${id}" missing section prefix or underscore`, 
+                        suggestion: `Follow section-based naming: e.g., "Banner_section" or "Testimonial_title". Current ID: "${id}"` 
+                    });
                 }
             });
             return { issues };
@@ -544,9 +661,11 @@ const RULES = [
         severity: 'info',
         description: 'Input, select, textarea, radio, checkbox must have consistent global CSS.',
         check(ctx) {
-            const { raw, styleCSS, responsiveCSS } = ctx;
+            const { doc, styleCSS, responsiveCSS } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS + '\n' + responsiveCSS;
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+
             const checks = [
                 { label: 'Text inputs (input[type=text/email])', pattern: /input\s*\{|input\[type[^]]*?(text|email)/i },
                 { label: 'Dropdowns (select)', pattern: /select\s*\{|select\s*,/i },
@@ -556,7 +675,7 @@ const RULES = [
             ];
             checks.forEach(({ label, pattern }) => {
                 if (!pattern.test(fullCss)) {
-                    issues.push({ line: null, message: `No global CSS found for: ${label}`, suggestion: `Add styles for ${label} in the main <style> block.` });
+                    issues.push({ line: null, message: `No active global CSS found for: ${label}`, suggestion: `Add styles for ${label} in the main <style> block.` });
                 }
             });
             return { issues };
@@ -569,16 +688,18 @@ const RULES = [
         severity: 'info',
         description: 'A styled Thank You message must exist and match the UI design.',
         check(ctx) {
-            const { raw, styleCSS, responsiveCSS, lines, styleLines, responsiveLines } = ctx;
+            const { doc, styleCSS, responsiveCSS, lines, styleLines, responsiveLines } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS + '\n' + responsiveCSS;
-            const hasTy = /thank.?you|thankyou|success.?msg|form.?success|mktFormMsg|confirmation/i.test(raw);
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+            
+            const hasTy = /thank.?you|thankyou|success.?msg|form.?success|mktFormMsg|confirmation/i.test(ctx.raw);
             if (!hasTy) {
                 issues.push({ line: null, message: 'No Thank You / success message found', suggestion: 'Add a styled Thank You section triggered on form submission matching the UI design.' });
             } else {
                 const hasTyStyle = /\.?thank.?you\s*\{|#thank|\.?form.?success\s*\{|\.?mktFormMsg/i.test(fullCss);
                 if (!hasTyStyle) {
-                    issues.push({ line: findLine(lines, 'thank') || findLine(styleLines, 'thank') || findLine(responsiveLines, 'thank'), message: 'Thank You element found but no matching CSS styles detected', suggestion: 'Add CSS for the Thank You state that matches the overall design.' });
+                    issues.push({ line: findLine(lines, 'thank') || findLine(styleLines, 'thank') || findLine(responsiveLines, 'thank'), message: 'Thank You element found but no matching active CSS styles detected', suggestion: 'Add CSS for the Thank You state that matches the overall design.' });
                 }
             }
             return { issues };
@@ -593,9 +714,11 @@ const RULES = [
         severity: 'info',
         description: 'Side-by-side equal-height columns must use display:flex on the parent.',
         check(ctx) {
-            const { raw, styleCSS, responsiveCSS, doc, lines } = ctx;
+            const { doc, styleCSS, responsiveCSS, lines } = ctx;
             const issues = [];
-            const fullCss = raw + '\n' + styleCSS + '\n' + responsiveCSS;
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+            
             const targets = ['location-content-wrapper', 'footer_btm_grp', 'footer_inner_grp', 'agenda-content-wrapper', 'header-inner'];
             targets.forEach(cls => {
                 const el = doc.querySelector(`.${cls}`);
@@ -604,9 +727,248 @@ const RULES = [
                 const hasFlexInCSS = new RegExp(`\\.${escape}[^{]*\\{[^}]*display\\s*:\\s*flex`, 'is').test(fullCss);
                 const hasFlexInStyle = /display\s*:\s*flex/.test(el.getAttribute('style') || '');
                 if (!hasFlexInCSS && !hasFlexInStyle) {
-                    issues.push({ line: findLine(lines, cls), message: `".${cls}" uses side-by-side columns but no display:flex found`, suggestion: `Add display: flex to .${cls} { } in your CSS for reliable equal-height layout.` });
+                    issues.push({ line: findLine(lines, cls), message: `".${cls}" uses side-by-side columns but no active display:flex found in CSS`, suggestion: `Add display: flex to .${cls} { } in your CSS for reliable equal-height layout.` });
                 }
             });
+            return { issues };
+        }
+    },
+    {
+        id: 'section-spacing-consistency',
+        name: 'Section Spacing Consistency',
+        category: 'Layout',
+        severity: 'warning',
+        description: 'Ensure consistent vertical padding/margins across all main sections.',
+        check(ctx) {
+            const { doc, lines } = ctx;
+            const issues = [];
+            
+            const mainSectionSelector = '[class*="-section"], [class*="module"], .mid-container > div[class]:not(.wrapper):not(.container):not(.inner):not(.outer)';
+            const parentSectionSelector = '[class*="-section"], [class*="module"]';
+
+            const sections = Array.from(doc.querySelectorAll(mainSectionSelector))
+                .filter(el => {
+                    if (el.closest('header, footer')) return false;
+                    const parentSection = el.parentElement.closest(parentSectionSelector);
+                    return !parentSection;
+                });
+
+            const data = [];
+            sections.forEach(sec => {
+                const style = sec.getAttribute('style') || '';
+                // Simple regex to extract padding/margin
+                const pt = (style.match(/padding-top\s*:\s*([^;]+)/i) || [null, ''])[1].trim();
+                const pb = (style.match(/padding-bottom\s*:\s*([^;]+)/i) || [null, ''])[1].trim();
+                const p = (style.match(/[^-\b]padding\s*:\s*([^;]+)/i) || [null, ''])[1].trim(); // non-dash prefix to avoid padding-top
+                
+                // Effective vertical padding
+                let vertical = p || `${pt} / ${pb}`;
+                if (vertical === ' / ') vertical = 'Not Set';
+                
+                data.push({ el: sec, spacing: vertical, cls: sec.className.split(' ')[0] });
+            });
+
+            // Find majority spacing
+            const counts = {};
+            data.forEach(d => counts[d.spacing] = (counts[d.spacing] || 0) + 1);
+            let majority = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b, 'Not Set');
+
+            data.forEach(d => {
+                if (d.spacing !== majority && d.spacing !== 'Not Set') {
+                    issues.push({ 
+                        line: findLine(lines, d.cls), 
+                        message: `Section ".${d.cls}" has inconsistent spacing: "${d.spacing}" (Majority is "${majority}")`, 
+                        suggestion: `Align spacing to "${majority}" to maintain design consistency and avoid odd/even gaps.`
+                    });
+                }
+            });
+
+            return { issues };
+        }
+    },
+    {
+        id: 'image-optimization-best-practices',
+        name: 'Image Optimization & Icons',
+        category: 'Assets',
+        severity: 'info',
+        description: 'Verify 2x Retina PNGs, SVGs for logos, and FontAwesome for icons.',
+        check(ctx) {
+            const { doc, lines } = ctx;
+            const issues = [];
+            
+            doc.querySelectorAll('img').forEach(img => {
+                const src = img.getAttribute('src') || '';
+                const filename = src.split('/').pop().toLowerCase();
+                
+                // 1. Check for 1x PNGs
+                if (filename.endsWith('.png') && !filename.includes('2x') && !filename.includes('svg')) {
+                    issues.push({ 
+                        line: findLine(lines, filename), 
+                        message: `Image "${filename}" might not be Retina optimized (no "@2x" found)`, 
+                        suggestion: 'Priority 1: Use 2x PNG images for high-density displays (e.g. filename@2x.png).' 
+                    });
+                }
+                
+                // 2. Suggest SVG for logos/UI elements
+                if ((filename.includes('logo') || filename.includes('icon')) && filename.endsWith('.png')) {
+                    issues.push({
+                        line: findLine(lines, filename),
+                        message: `UI Element "${filename}" is a PNG`,
+                        suggestion: 'Priority 2: Use .SVG images or SVG code for logos and simple icons for better performance.'
+                    });
+                }
+            });
+
+            // 3. Social Icons -> Font Awesome check
+            const socialPatterns = /facebook|twitter|instagram|linkedin|youtube|social/i;
+            doc.querySelectorAll('a').forEach(anchor => {
+                const href = anchor.getAttribute('href') || '';
+                const cls = anchor.className || '';
+                if (socialPatterns.test(href) || socialPatterns.test(cls)) {
+                    const hasIcon = !!anchor.querySelector('i.fa, i.fab, i.fas, i.far');
+                    const hasImg = !!anchor.querySelector('img');
+                    if (hasImg && !hasIcon) {
+                        issues.push({
+                            line: findLine(lines, anchor.className.split(' ')[0] || 'social'),
+                            message: 'Social link using <img> instead of FontAwesome',
+                            suggestion: 'Use FontAwesome icons (<i> tags) for social links instead of images.'
+                        });
+                    }
+                }
+            });
+
+            return { issues };
+        }
+    },
+    {
+        id: 'hidden-section-no-gap',
+        name: 'Hidden Sections & Slider Gaps',
+        category: 'Show / Hide',
+        severity: 'warning',
+        description: 'Verify false_value="none" for all mktoBoolean toggles and check slider/slide consistency.',
+        check(ctx) {
+            const { doc, lines } = ctx;
+            const issues = [];
+            
+            // 1. Check all mktoBoolean for false_value="none"
+            doc.querySelectorAll('meta.mktoBoolean').forEach(meta => {
+                const id = meta.id || 'unknown';
+                const falseVal = meta.getAttribute('false_value');
+                const mktoName = meta.getAttribute('mktoName') || id;
+                
+                if (falseVal && falseVal !== 'none') {
+                    issues.push({ 
+                        line: findLine(lines, id), 
+                        message: `Toggle "${mktoName}" uses false_value="${falseVal}"`, 
+                        suggestion: 'Change to false_value="none" so the element fully collapses and doesn\'t leave spacing gaps when hidden.' 
+                    });
+                }
+                
+                // 2. Specific Slider/Slide check
+                if (id.toLowerCase().includes('slide') || mktoName.toLowerCase().includes('slide')) {
+                    issues.push({
+                        line: findLine(lines, id),
+                        message: `Slider toggle detected: "${mktoName}"`,
+                        suggestion: 'NOTE: For sliders, ensure show/hide logic doesn\'t break layout or create odd gaps between active slides. Verify default visibility matches design.'
+                    });
+                }
+            });
+
+            // 3. Check for elements that look like slides
+            const slideSelectors = '.slide, .carousel-item, [class*="slide"]';
+            doc.querySelectorAll(slideSelectors).forEach(slide => {
+                const style = slide.getAttribute('style') || '';
+                if (slide.className.includes('slide') && !style.includes('display')) {
+                    issues.push({
+                        line: findLine(lines, slide.className.split(' ')[0]),
+                        message: `Potential slide ".${slide.className.split(' ')[0]}" has no inline show/hide control`,
+                        suggestion: 'Ensure slides can be toggled and that hidden slides use display:none to avoid layout shifts.'
+                    });
+                }
+            });
+
+            return { issues };
+        }
+    },
+    {
+        id: 'centralized-style-control',
+        name: 'Centralized Style Control',
+        category: 'Layout',
+        severity: 'warning',
+        description: 'Ensure styles are controlled centrally in CSS or via Marketo variables, not hardcoded in modules.',
+        check(ctx) {
+            const { doc, lines } = ctx;
+            const issues = [];
+            
+            const mainSectionSelector = '[class*="-section"], [class*="module"], .mid-container > div[class]:not(.wrapper):not(.container):not(.inner):not(.outer)';
+            const bannedProps = ['font-family', 'color', 'font-size', 'line-height', 'background-color'];
+
+            doc.querySelectorAll(mainSectionSelector).forEach(sec => {
+                const elements = [sec, ...Array.from(sec.querySelectorAll('*'))];
+                elements.forEach(el => {
+                    const style = el.getAttribute('style') || '';
+                    if (!style) return;
+
+                    bannedProps.forEach(prop => {
+                        const regex = new RegExp(`${prop}\\s*:\\s*([^;]+)`, 'i');
+                        const match = style.match(regex);
+                        if (match) {
+                            const val = match[1].trim();
+                            // If value doesn't contain a Marketo variable ${...}
+                            if (!val.includes('${')) {
+                                const id = el.id || el.className.split(' ')[0] || el.tagName.toLowerCase();
+                                issues.push({
+                                    line: findLine(lines, id),
+                                    message: `Hardcoded "${prop}: ${val}" found in <${el.tagName.toLowerCase()}> inside module`,
+                                    suggestion: `Move "${prop}" to global CSS or use a Marketo variable (\${var_name}) to maintain centralized control.`
+                                });
+                            }
+                        }
+                    });
+                });
+            });
+
+            return { issues };
+        }
+    },
+    {
+        id: 'button-hover-dynamic',
+        name: 'Dynamic Button Hover States',
+        category: 'Buttons',
+        severity: 'warning',
+        description: 'Ensure button hover states are defined in CSS using Marketo variables for customization consistency.',
+        check(ctx) {
+            const { doc, styleCSS, responsiveCSS } = ctx;
+            const issues = [];
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+            
+            const btnSelector = '.btn_grp, .button, .btn, .sticky_btn, a.mktoText[id*="btn"]';
+            const buttons = Array.from(doc.querySelectorAll(btnSelector));
+
+            if (buttons.length > 0) {
+                const hasDynamicHover = /:hover[^{]*\{[^}]*\$\{/.test(fullCss);
+                if (!hasDynamicHover) {
+                    issues.push({
+                        line: findLine(styleLines, ':hover') || findLine(responsiveLines, ':hover'),
+                        message: 'No active dynamic hover states found in CSS',
+                        suggestion: 'Ensure button :hover rules in CSS use Marketo variables (e.g. background-color: ${btn_hover_bg_color};) so they work after color customization.'
+                    });
+                }
+
+                const hoverBlocks = fullCss.match(/[^{},]+\s*:hover\s*\{[^}]+\}/gi) || [];
+                hoverBlocks.forEach(block => {
+                    if (/#([0-9a-fA-F]{3,6})/.test(block) && !block.includes('${')) {
+                        const selector = block.split('{')[0].trim();
+                        issues.push({
+                            line: findLine(styleLines, selector) || findLine(responsiveLines, selector) || findLine(lines, selector),
+                            message: `Hardcoded color found in active CSS hover rule: "${selector}"`,
+                            suggestion: 'Use a Marketo variable in hover states to allow customization.'
+                        });
+                    }
+                });
+            }
+
             return { issues };
         }
     }

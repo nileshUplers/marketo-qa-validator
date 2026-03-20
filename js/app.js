@@ -35,13 +35,41 @@ const sumPassed   = document.getElementById('sumPassed');
 const sumCritical = document.getElementById('sumCritical');
 const sumWarning  = document.getElementById('sumWarning');
 const sumInfo     = document.getElementById('sumInfo');
+const themeToggleBtn = document.getElementById('themeToggleBtn');
+const themeIcon      = themeToggleBtn.querySelector('.theme-icon');
+const themeText      = themeToggleBtn.querySelector('.theme-text');
 
 let lastReport = null;
+
+// ── THEME LOGIC ──────────────────────────────────────────────────────────────
+function setTheme(isLight) {
+    if (isLight) {
+        document.body.classList.add('light-mode');
+        themeIcon.textContent = '☀️';
+        themeText.textContent = 'Light';
+        localStorage.setItem('theme', 'light');
+    } else {
+        document.body.classList.remove('light-mode');
+        themeIcon.textContent = '🌙';
+        themeText.textContent = 'Dark';
+        localStorage.setItem('theme', 'dark');
+    }
+}
+
+// Initialize theme
+const savedTheme = localStorage.getItem('theme');
+if (savedTheme === 'light') setTheme(true);
+
+themeToggleBtn.addEventListener('click', () => {
+    const isLight = document.body.classList.contains('light-mode');
+    setTheme(!isLight);
+});
 
 // ── File Upload Logic ─────────────────────────────────────────────────────────
 uploadBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => {
     Array.from(e.target.files).forEach(file => readFile(file));
+    e.target.value = ''; // Reset input value so re-selecting same file works
 });
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
@@ -159,7 +187,9 @@ function renderResults(report) {
 
     Object.entries(byCategory).forEach(([category, rules]) => {
         const catPassed  = rules.filter(r => r.passed).length;
-        const catFailed  = rules.length - catPassed;
+        // Count actual failures (Critical or Warning)
+        const catFailed  = rules.filter(r => !r.passed).length;
+        
         const hasCritical = rules.some(r => !r.passed && r.severity === 'critical');
         const hasWarning  = rules.some(r => !r.passed && r.severity === 'warning');
         const catStatus   = hasCritical ? 'critical' : hasWarning ? 'warning' : catFailed > 0 ? 'info' : 'passed';
@@ -184,7 +214,10 @@ function renderResults(report) {
 }
 
 function renderRule(rule) {
-    if (rule.passed) {
+    const hasIssues = rule.issues.length > 0;
+    
+    // Completely clear pass
+    if (rule.passed && !hasIssues) {
         return `<div class="rule-item rule-passed">
             <span class="rule-status-icon">✅</span>
             <div class="rule-info">
@@ -194,18 +227,23 @@ function renderRule(rule) {
         </div>`;
     }
 
+    // Info-only notification (passed=true but has issues)
+    const isInfoOnly = rule.passed && hasIssues;
+    const itemClass = isInfoOnly ? 'rule-info' : 'rule-failed';
+    const statusIcon = isInfoOnly ? 'ℹ️' : '❌';
+
     const issueHTML = rule.issues.map(issue => `
         <div class="issue-item">
             <div class="issue-header">
-                <span class="badge badge-${rule.severity}">${SEVERITY_LABEL[rule.severity]}</span>
+                <span class="badge badge-${issue.severity || rule.severity}">${SEVERITY_LABEL[issue.severity || rule.severity]}</span>
                 ${issue.line ? `<span class="issue-line">Line ${issue.line}</span>` : ''}
             </div>
             <div class="issue-message">⚠ ${escHtml(issue.message)}</div>
             <div class="issue-suggestion">💡 ${escHtml(issue.suggestion)}</div>
         </div>`).join('');
 
-    return `<div class="rule-item rule-failed">
-        <span class="rule-status-icon">❌</span>
+    return `<div class="rule-item ${itemClass}">
+        <span class="rule-status-icon">${statusIcon}</span>
         <div class="rule-info">
             <div class="rule-name">${rule.name}</div>
             <div class="rule-desc">${rule.description}</div>

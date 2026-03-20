@@ -20,7 +20,13 @@
             <div class="header-tag">Template Quality Checker</div>
         </div>
     </div>
-    <div class="header-badge" id="rulesBadgeBtn" title="View all QA rules">22 Rules · 8 Categories</div>
+    <div class="header-right">
+        <button class="theme-toggle" id="themeToggleBtn" title="Toggle Light/Dark Mode">
+            <span class="theme-icon">🌙</span>
+            <span class="theme-text">Dark</span>
+        </button>
+        <div class="header-badge" id="rulesBadgeBtn" title="View all QA rules">22 Rules · 8 Categories</div>
+    </div>
 </header>
 
 <!-- MAIN -->
@@ -44,14 +50,22 @@
 
         <!-- Paste Area -->
         <div class="textarea-wrap">
-            <div class="code-label">Or paste HTML code directly</div>
-            <textarea id="codeInput" placeholder="Paste your Marketo template HTML here…" spellcheck="false"></textarea>
-            
-            <div class="code-label mt-4">Style CSS</div>
-            <textarea id="styleInput" class="css-input" placeholder="Paste your main style.css here…" spellcheck="false"></textarea>
+            <div class="code-grid">
+                <div class="code-field code-field-full">
+                    <div class="code-label">Marketo HTML</div>
+                    <textarea id="codeInput" placeholder="Paste your Marketo template HTML here…" spellcheck="false"></textarea>
+                </div>
+                
+                <div class="code-field">
+                    <div class="code-label">Style CSS</div>
+                    <textarea id="styleInput" class="css-input" placeholder="Paste your main style.css here…" spellcheck="false"></textarea>
+                </div>
 
-            <div class="code-label mt-4">Responsive CSS</div>
-            <textarea id="responsiveInput" class="css-input" placeholder="Paste your responsive.css here…" spellcheck="false"></textarea>
+                <div class="code-field">
+                    <div class="code-label">Responsive CSS</div>
+                    <textarea id="responsiveInput" class="css-input" placeholder="Paste your responsive.css here…" spellcheck="false"></textarea>
+                </div>
+            </div>
 
             <div class="input-footer">
                 <span id="charCount"></span>

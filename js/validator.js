@@ -35,8 +35,11 @@ const Validator = {
                 category: rule.category,
                 severity: rule.severity,
                 description: rule.description,
-                passed: ruleResult.issues.length === 0,
-                issues: ruleResult.issues
+                passed: !ruleResult.issues.some(i => (i.severity || rule.severity) !== 'info'),
+                issues: ruleResult.issues.map(i => ({
+                    ...i,
+                    severity: i.severity || rule.severity
+                }))
             });
         });
 

@@ -295,101 +295,125 @@ const RULES = [
 
     // ─── BUTTONS ─────────────────────────────────────────────────────────────
     {
-        id: 'comprehensive-button-requirements',
-        name: 'Comprehensive Button Requirements',
+        id: 'button-per-instance',
+        name: 'Per-Button Requirements',
         category: 'Buttons',
         severity: 'critical',
-        description: 'Verify buttons have show/hide, editable text, links, and design-aligned colors.',
+        description: 'Check individual buttons for show/hide toggles, editable text, and link support.',
         check(ctx) {
-            const { doc, lines, styleLines, responsiveLines, styleCSS, responsiveCSS, raw } = ctx;
+            const { doc, lines } = ctx;
             const issues = [];
-            const boolIds = Array.from(doc.querySelectorAll('meta.mktoBoolean')).map(m => m.id);
-            const colorIds = Array.from(doc.querySelectorAll('meta.mktoColor')).map(m => m.id.toLowerCase());
-            const fullCss = raw + '\n' + styleCSS + '\n' + responsiveCSS;
-
-            // Selector covers both standard wrappers and the user's custom example
             const btnSelector = '.btn_grp, .button, .btn, .sticky_btn, a.mktoText[id*="btn"]';
             const buttons = Array.from(doc.querySelectorAll(btnSelector));
 
+            if (buttons.length === 0) return { issues };
+
             let lastBtnLine = 0;
             buttons.forEach(btn => {
-                const id = btn.id || btn.className.split(' ')[0] || 'button';
+                const id   = btn.id || btn.className.split(' ')[0] || 'button';
                 const search = btn.id ? `id="${btn.id}"` : btn.textContent.trim().substring(0, 30);
-                const name = btn.id || `"${btn.textContent.trim().substring(0, 20)}..."`;
-                
+                const name   = btn.id ? `#${btn.id}` : `"${btn.textContent.trim().substring(0, 25)}"`;
+
                 const foundLine = findLine(lines, search, lastBtnLine) || findLine(lines, id, lastBtnLine);
                 if (foundLine) lastBtnLine = foundLine;
 
-                const style = btn.getAttribute('style') || '';
+                const style       = btn.getAttribute('style') || '';
                 const parentStyle = btn.parentElement ? (btn.parentElement.getAttribute('style') || '') : '';
-                const anchor = btn.tagName === 'A' ? btn : btn.querySelector('a');
+                const anchor      = btn.tagName === 'A' ? btn : btn.querySelector('a');
 
-                const btnFailures = [];
-                const suggestions = [];
-
-                // 1. Show/Hide Functionality
-                const hasToggle = /display\s*:\s*\$\{/.test(style) || /display\s*:\s*\$\{/.test(parentStyle);
-                if (!hasToggle) {
-                    btnFailures.push('missing Show/Hide toggle');
-                    suggestions.push(`Wrap in a div or add style="display:\${show_${btn.id || 'button'}};" with a mktoBoolean.`);
+                if (!/display\s*:\s*\$\{/.test(style) && !/display\s*:\s*\$\{/.test(parentStyle)) {
+                    issues.push({ 
+                        line: foundLine, 
+                        message: `Button ${name}: missing Show/Hide toggle`, 
+                        suggestion: `Add style="display:\${show_${id}};" and declare <meta class="mktoBoolean" id="show_${id}" …> in <head>.` 
+                    });
                 }
 
-                // 2. Editable Text
-                if (anchor) {
+                if (!anchor) {
+                    issues.push({ 
+                        line: foundLine, 
+                        message: `Button ${name}: no <a> tag found`, 
+                        suggestion: 'Wrap your button label in an <a> tag.' 
+                    });
+                } else {
                     const hasMktoText = anchor.classList.contains('mktoText') || !!anchor.querySelector('.mktoText');
                     if (!hasMktoText) {
-                        btnFailures.push('text is not editable (no mktoText)');
-                        suggestions.push('Add class="mktoText" to the anchor or wrap text in a mktoText span.');
+                        issues.push({ 
+                            line: foundLine, 
+                            message: `Button ${name}: no mktoText class`, 
+                            suggestion: 'Add class="mktoText" to the anchor or wrap text in a mktoText span.' 
+                        });
                     }
-
-                    // 3. Editable Link
                     const href = anchor.getAttribute('href') || '';
                     if (href && !href.includes('${') && !anchor.classList.contains('mktoLink') && href !== '#') {
-                        btnFailures.push(`link is hardcoded: "${href}"`);
-                        suggestions.push('Use a Marketo variable like href="${btn_url}" or add class="mktoLink".');
+                        issues.push({ 
+                            line: foundLine, 
+                            message: `Button ${name}: hardcoded href`, 
+                            suggestion: 'Use href="${btn_url}" or add class="mktoLink".' 
+                        });
                     }
                 }
-
-                if (btnFailures.length > 0) {
-                    issues.push({
-                        line: foundLine,
-                        message: `Button ${name}: ` + btnFailures.join('; '),
-                        suggestion: suggestions.join(' ')
-                    });
-                }
             });
+            return { issues };
+        }
+    },
+    {
+        id: 'button-global-style',
+        name: 'Global Button Styling',
+        category: 'Buttons',
+        severity: 'warning',
+        description: 'Verify 6 required global color variables and ensure button hover states use variables (not hex).',
+        check(ctx) {
+            const { doc, lines, styleLines, responsiveLines, styleCSS, responsiveCSS } = ctx;
+            const issues = [];
+            const btnSelector = '.btn_grp, .button, .btn, .sticky_btn, a.mktoText[id*="btn"]';
+            if (!doc.querySelector(btnSelector)) return { issues };
 
-            // 4. Button Colors (Global variables check)
-            if (buttons.length > 0) {
-                const hasBtnColor = colorIds.some(id => /btn/i.test(id));
-                if (!hasBtnColor) {
-                    issues.push({
-                        line: findLine(lines, 'mktoColor'),
-                        message: 'No mktoColor variable found for button styling',
-                        suggestion: 'Add at least one <meta class="mktoColor" id="btn_color" mktoName="Button Color" default="#000000"> in <head> to allow global button color editing.'
-                    });
-                }
+            // 1. Global Color Variables
+            const allMetaIds = Array.from(doc.querySelectorAll('meta.mktoColor, meta.mktoString')).map(m => m.id.toLowerCase());
+            const globalVars = [
+                { patterns: [/btn_?(?:text_?)?colou?r$/i], label: 'Button text color', example: 'btn_color' },
+                { patterns: [/btn_?(?:text_?)?hover_?colou?r$/i, /btn_?colou?r_?hover$/i], label: 'Button text hover color', example: 'btn_hover_color' },
+                { patterns: [/btn_?bg_?colou?r$/i, /btn_?background_?colou?r$/i], label: 'Button background color', example: 'btn_bg_color' },
+                { patterns: [/btn_?bg_?hover_?colou?r$/i, /btn_?hover_?bg_?colou?r$/i], label: 'Button background hover color', example: 'btn_bg_hover_color' },
+                { patterns: [/btn_?border_?colou?r$/i], label: 'Button border color', example: 'btn_border_color' },
+                { patterns: [/btn_?border_?hover_?colou?r$/i, /btn_?hover_?border_?colou?r$/i], label: 'Button border hover color', example: 'btn_border_hover_color' }
+            ];
+
+            const missingVars = globalVars.filter(v => !allMetaIds.some(id => v.patterns.some(p => p.test(id))));
+            if (missingVars.length > 0) {
+                const mktoColorLine = findLine(lines, 'mktoColor') || findLine(lines, 'mktoString');
+                issues.push({
+                    line: mktoColorLine,
+                    message: `Missing ${missingVars.length} global variables: ${missingVars.map(v => v.label).join(', ')}`,
+                    suggestion: 'Add missing <meta class="mktoColor"> tags with IDs like ' + missingVars.map(v => v.example).join(', ')
+                });
             }
 
-            // 5. No Hardcoded Colors (Inline check)
-            let lastColorLine = 0;
-            buttons.forEach(btn => {
-                const id = btn.id || btn.className.split(' ')[0] || 'button';
-                const search = btn.id ? `id="${btn.id}"` : btn.textContent.trim().substring(0, 30);
-                const name = btn.id || `"${btn.textContent.trim().substring(0, 20)}..."`;
-                
-                const foundLine = findLine(lines, search, lastColorLine) || findLine(lines, id, lastColorLine);
-                if (foundLine) lastColorLine = foundLine;
-
-                const style = btn.getAttribute('style') || '';
-                if (/#([0-9a-fA-F]{3,6})/.test(style)) {
+            // 2. Hover State CSS
+            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
+            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
+            const hoverBlocks = fullCss.match(/[^{},]+:hover\s*\{[^}]+\}/gi) || [];
+            
+            hoverBlocks.forEach(block => {
+                const selector = block.split(':hover')[0].trim();
+                const isBtnHover = /\.btn|button|sticky_btn/i.test(selector);
+                if (isBtnHover && /#([0-9a-fA-F]{3,6})/.test(block) && !block.includes('${')) {
                     issues.push({
-                        line: foundLine,
-                        message: `Button ${name} has hardcoded hex color in inline style`,
-                        suggestion: 'Replace with a Marketo variable for editability.'
+                        line: findLine(styleLines, selector) || findLine(responsiveLines, selector) || findLine(lines, selector),
+                        message: `Hardcoded hex in button :hover: "${selector}:hover"`,
+                        suggestion: 'Replace with Marketo variables, e.g. color: ${btn_hover_color};'
                     });
                 }
             });
+
+            if (!hoverBlocks.some(b => /\.btn|button|sticky_btn/i.test(b.split(':hover')[0]) && b.includes('${')) && hoverBlocks.length === 0) {
+                issues.push({
+                    line: findLine(styleLines, ':hover') || findLine(responsiveLines, ':hover'),
+                    message: 'No button :hover rule found in CSS',
+                    suggestion: 'Add :hover rules using global style variables.'
+                });
+            }
 
             return { issues };
         }
@@ -401,6 +425,7 @@ const RULES = [
         name: 'Section Reordering Support',
         category: 'Sections',
         severity: 'critical',
+        description: 'Verify that sections have dynamic order properties and the container is set to display: flex.',
         check(ctx) {
             const { doc, lines, styleCSS, responsiveCSS } = ctx;
             const issues = [];
@@ -655,6 +680,21 @@ const RULES = [
 
     // ─── FORMS ───────────────────────────────────────────────────────────────
     {
+        id: 'form-presence-check',
+        name: 'Form Presence',
+        category: 'Forms',
+        severity: 'info',
+        description: 'Check if a Marketo form is present on the template.',
+        check(ctx) {
+            const { doc } = ctx;
+            const hasForm = !!doc.querySelector('.mktoForm, [id*="mktoForm"]');
+            if (!hasForm) {
+                return { issues: [{ line: null, severity: 'info', message: 'No Marketo form detected in this template.', suggestion: 'If this template should include a form, ensure you have a <div class="mktoForm" id="..."></div> container.' }] };
+            }
+            return { issues: [] };
+        }
+    },
+    {
         id: 'form-elements-styled',
         name: 'Form Elements Globally Styled',
         category: 'Forms',
@@ -663,6 +703,11 @@ const RULES = [
         check(ctx) {
             const { doc, styleCSS, responsiveCSS } = ctx;
             const issues = [];
+            
+            // Only validate if a form exists on the page
+            const hasForm = !!doc.querySelector('.mktoForm, [id*="mktoForm"]');
+            if (!hasForm) return { issues };
+
             const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
             const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
 
@@ -690,6 +735,11 @@ const RULES = [
         check(ctx) {
             const { doc, styleCSS, responsiveCSS, lines, styleLines, responsiveLines } = ctx;
             const issues = [];
+
+            // Only validate if a form exists on the page
+            const hasForm = !!doc.querySelector('.mktoForm, [id*="mktoForm"]');
+            if (!hasForm) return { issues };
+
             const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
             const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
             
@@ -927,47 +977,6 @@ const RULES = [
                     });
                 });
             });
-
-            return { issues };
-        }
-    },
-    {
-        id: 'button-hover-dynamic',
-        name: 'Dynamic Button Hover States',
-        category: 'Buttons',
-        severity: 'warning',
-        description: 'Ensure button hover states are defined in CSS using Marketo variables for customization consistency.',
-        check(ctx) {
-            const { doc, styleCSS, responsiveCSS } = ctx;
-            const issues = [];
-            const styleTags = Array.from(doc.querySelectorAll('style')).map(s => stripComments(s.textContent)).join('\n');
-            const fullCss = stripComments(styleCSS) + '\n' + stripComments(responsiveCSS) + '\n' + styleTags;
-            
-            const btnSelector = '.btn_grp, .button, .btn, .sticky_btn, a.mktoText[id*="btn"]';
-            const buttons = Array.from(doc.querySelectorAll(btnSelector));
-
-            if (buttons.length > 0) {
-                const hasDynamicHover = /:hover[^{]*\{[^}]*\$\{/.test(fullCss);
-                if (!hasDynamicHover) {
-                    issues.push({
-                        line: findLine(styleLines, ':hover') || findLine(responsiveLines, ':hover'),
-                        message: 'No active dynamic hover states found in CSS',
-                        suggestion: 'Ensure button :hover rules in CSS use Marketo variables (e.g. background-color: ${btn_hover_bg_color};) so they work after color customization.'
-                    });
-                }
-
-                const hoverBlocks = fullCss.match(/[^{},]+\s*:hover\s*\{[^}]+\}/gi) || [];
-                hoverBlocks.forEach(block => {
-                    if (/#([0-9a-fA-F]{3,6})/.test(block) && !block.includes('${')) {
-                        const selector = block.split('{')[0].trim();
-                        issues.push({
-                            line: findLine(styleLines, selector) || findLine(responsiveLines, selector) || findLine(lines, selector),
-                            message: `Hardcoded color found in active CSS hover rule: "${selector}"`,
-                            suggestion: 'Use a Marketo variable in hover states to allow customization.'
-                        });
-                    }
-                });
-            }
 
             return { issues };
         }
